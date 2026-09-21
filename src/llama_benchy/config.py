@@ -103,6 +103,10 @@ class BenchmarkConfig(BaseModel):
         None,
         description="Prometheus metrics endpoint to scrape before/after each test cell for spec-decode acceptance and prefix-cache hit rate",
     )
+    live: bool = Field(
+        False,
+        description="Print each test cell's result row immediately after it completes, and append to <save-result>.live.md if --save-result is given",
+    )
 
     @staticmethod
     def _parse_extra_body(values: Optional[List[str]]) -> Dict[str, Any]:
@@ -442,6 +446,16 @@ class BenchmarkConfig(BaseModel):
             help="top_k to send. Unset (default): not sent, the model's generation_config applies.",
         )
         parser.add_argument(
+            "--live",
+            action="store_true",
+            help=(
+                "Print each test cell's result row immediately as it completes (one-line "
+                "markdown row, same columns as the final table), and append it to "
+                "<save-result>.live.md if --save-result is given. `tail -f` the log or "
+                "the .live.md file to watch a run in progress. The final table is unchanged."
+            ),
+        )
+        parser.add_argument(
             "--metrics-url",
             type=str,
             default=None,
@@ -523,4 +537,5 @@ class BenchmarkConfig(BaseModel):
             top_p=args.top_p,
             top_k=args.top_k,
             metrics_url=args.metrics_url,
+            live=args.live,
         )

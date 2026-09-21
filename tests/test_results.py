@@ -47,6 +47,56 @@ def test_burst_output_does_not_report_decode_throughput():
     assert tg_row["peak_ts"] is not None
 
 
+def test_format_live_rows_matches_final_table_row():
+    result = RequestResult(
+        start_ts=0.0,
+        first_response_ts=1.0,
+        first_token_ts=1.0,
+        end_ts=1.35,
+        prompt_tokens=100,
+        total_tokens=4,
+        token_timestamps=[1.0, 1.1, 1.2, 1.3],
+    )
+
+    results = BenchmarkResults()
+    run = results.add("model", 100, 4, 0, 1, [[result]], latency=0.0, expected_pp_tokens=100)
+
+    live_rows = results.format_live_rows(run, max_concurrency=1)
+    assert live_rows  # at least one row (pp and/or tg)
+    for line in live_rows:
+        assert line.startswith("| ") and line.endswith(" |")
+        assert "model" in line
+
+    # Same cells the final markdown table would render for this run.
+    final_rows = results._generate_rows(max_concurrency=1)
+    expected = ["| " + " | ".join(results._data_row(r, 1)) + " |" for r in final_rows]
+    assert live_rows == expected
+
+
+def test_format_live_rows_includes_metrics_columns_when_enabled():
+    result = RequestResult(
+        start_ts=0.0,
+        first_response_ts=1.0,
+        first_token_ts=1.0,
+        end_ts=1.35,
+        prompt_tokens=100,
+        total_tokens=4,
+        token_timestamps=[1.0, 1.1, 1.2, 1.3],
+    )
+
+    results = BenchmarkResults()
+    results.metrics_enabled = True
+    run = results.add(
+        "model", 100, 4, 0, 1, [[result]], latency=0.0, expected_pp_tokens=100,
+        accept_per_draft=0.9, prefix_hit_rate=0.5,
+    )
+
+    live_rows = results.format_live_rows(run, max_concurrency=1)
+    pp_row = next(line for line in live_rows if "pp100" in line)
+    assert "0.900" in pp_row
+    assert "0.500" in pp_row
+
+
 def test_block_streaming_excludes_first_observed_block_from_decode_throughput():
     first_block = [1.0] * 256
     second_block = [1.25 + (0.75 * (i + 1) / 256) for i in range(256)]

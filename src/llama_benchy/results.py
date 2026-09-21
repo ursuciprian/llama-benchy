@@ -159,8 +159,8 @@ class BenchmarkResults:
             save_total_throughput_timeseries: bool = False,
             save_all_throughput_timeseries: bool = False,
             accept_per_draft: Optional[float] = None,
-            prefix_hit_rate: Optional[float] = None):
-        
+            prefix_hit_rate: Optional[float] = None) -> BenchmarkRun:
+
         if self.model_name is None:
             self.model_name = model
 
@@ -215,7 +215,7 @@ class BenchmarkResults:
         run_metric_est_ppt = self._calculate_metric(agg_est_ppt_values, 1000)
         run_metric_e2e_ttft = self._calculate_metric(agg_e2e_ttft_values, 1000)
 
-        self.runs.append(BenchmarkRun(
+        new_run = BenchmarkRun(
             concurrency=concurrency,
             context_size=depth,
             prompt_size=pp, # Configured prompt size
@@ -234,7 +234,9 @@ class BenchmarkResults:
             requests_throughput_over_time=agg_req_throughput_series if save_all_throughput_timeseries else None,
             accept_per_draft=accept_per_draft,
             prefix_hit_rate=prefix_hit_rate
-        ))
+        )
+        self.runs.append(new_run)
+        return new_run
 
     def _process_batch(self, 
                        results: List[RequestResult], 
@@ -379,11 +381,15 @@ class BenchmarkResults:
                 agg_peak_throughputs.append(res)
 
 
-    def _generate_rows(self) -> List[Dict[str, Any]]:
+    def _generate_rows(self, runs: Optional[List[BenchmarkRun]] = None, max_concurrency: Optional[int] = None) -> List[Dict[str, Any]]:
         rows = []
-        for run in self.runs:
+        if runs is None:
+            runs = self.runs
+        if max_concurrency is None:
+            max_concurrency = self.metadata.max_concurrency if self.metadata else 1
+        for run in runs:
             c_suffix = ""
-            if self.metadata and self.metadata.max_concurrency > 1:
+            if max_concurrency > 1:
                 c_suffix = f" (c{run.concurrency})"
 
             if run.is_context_prefill_phase:
@@ -455,58 +461,56 @@ class BenchmarkResults:
                     })
         return rows
 
+    @staticmethod
+    def _fmt_metric(metric: Optional[BenchmarkMetric]) -> str:
+        if metric is None:
+            return ""
+        return f"{metric.mean:.2f} ± {metric.std:.2f}"
+
+    @staticmethod
+    def _fmt_ratio(value: Optional[float]) -> str:
+        if value is None:
+            return ""
+        return f"{value:.3f}"
+
+    def _metrics_cols(self, row: Dict[str, Any]) -> List[str]:
+        if not self.metrics_enabled:
+            return []
+        return [self._fmt_ratio(row["accept_per_draft"]), self._fmt_ratio(row["prefix_hit_rate"])]
+
+    def _md_headers(self, concurrency: int) -> List[str]:
+        ts_header = "t/s (total)" if concurrency > 1 else "t/s"
+        metrics_headers = ["accept/draft", "prefix-hit"] if self.metrics_enabled else []
+        if concurrency > 1:
+            return ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
+        return ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
+
+    def _data_row(self, row: Dict[str, Any], concurrency: int) -> List[str]:
+        """Format one result row's cells, matching the final table's columns."""
+        fmt = self._fmt_metric
+        if concurrency > 1:
+            cells = [row["model"], row["test_name"], fmt(row["t_s"]), fmt(row["t_s_req"]), fmt(row["peak_ts"]), fmt(row["peak_ts_req"]), fmt(row["ttfr"]), fmt(row["est_ppt"]), fmt(row["e2e_ttft"])]
+        else:
+            cells = [row["model"], row["test_name"], fmt(row["t_s"]), fmt(row["peak_ts"]), fmt(row["ttfr"]), fmt(row["est_ppt"]), fmt(row["e2e_ttft"])]
+        return cells + self._metrics_cols(row)
+
     def _generate_md_report(self, concurrency: int) -> str:
         rows = self._generate_rows()
         if not rows:
             return "No results collected. Check if the model is generating tokens."
 
-        def fmt(metric: Optional[BenchmarkMetric]) -> str:
-            if metric is None:
-                return ""
-            return f"{metric.mean:.2f} ± {metric.std:.2f}"
+        data = [self._data_row(row, concurrency) for row in rows]
+        headers = self._md_headers(concurrency)
 
-        def fmt_ratio(value: Optional[float]) -> str:
-            if value is None:
-                return ""
-            return f"{value:.3f}"
-
-        def metrics_cols(row: Dict[str, Any]) -> List[str]:
-            if not self.metrics_enabled:
-                return []
-            return [fmt_ratio(row["accept_per_draft"]), fmt_ratio(row["prefix_hit_rate"])]
-
-        metrics_headers = ["accept/draft", "prefix-hit"] if self.metrics_enabled else []
         metrics_align = ("right", "right") if self.metrics_enabled else ()
-
-        data = [[
-            row["model"],
-            row["test_name"],
-            fmt(row["t_s"]),
-            fmt(row["t_s_req"]),
-            fmt(row["peak_ts"]),
-            fmt(row["peak_ts_req"]),
-            fmt(row["ttfr"]),
-            fmt(row["est_ppt"]),
-            fmt(row["e2e_ttft"])
-        ] + metrics_cols(row) for row in rows]
-
-        ts_header = "t/s (total)" if concurrency > 1 else "t/s"
-        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
-
-        if concurrency == 1:
-            data = [[
-                row["model"],
-                row["test_name"],
-                fmt(row["t_s"]),
-                fmt(row["peak_ts"]),
-                fmt(row["ttfr"]),
-                fmt(row["est_ppt"]),
-                fmt(row["e2e_ttft"])
-            ] + metrics_cols(row) for row in rows]
-            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
-
         colalign = ("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right")
         return tabulate(data, headers=headers, tablefmt="pipe", colalign=colalign + metrics_align)
+
+    def format_live_rows(self, run: BenchmarkRun, max_concurrency: int) -> List[str]:
+        """Format one just-completed test cell's result row(s) as one-line markdown
+        table rows, same columns as the final table. Used by --live."""
+        rows = self._generate_rows(runs=[run], max_concurrency=max_concurrency)
+        return ["| " + " | ".join(self._data_row(row, max_concurrency)) + " |" for row in rows]
 
     def save_report(self, filename: Optional[str], format: str, concurrency: int = 1):
         msg = ""
