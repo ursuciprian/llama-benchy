@@ -9,6 +9,7 @@ import aiohttp
 from ._version import __version__
 from .config import BenchmarkConfig
 from .client import CONTEXT_LOAD_USER_MESSAGE, LLMClient
+from .metrics import compute_metric_deltas, fetch_metrics
 from .prompts import PromptGenerator
 from .results import BenchmarkResults, BenchmarkMetadata
 
@@ -21,6 +22,7 @@ class BenchmarkRunner:
         self.client = client
         self.prompt_gen = prompt_generator
         self.results = BenchmarkResults()
+        self.results.metrics_enabled = bool(config.metrics_url)
         self.progress = progress
         self._next_request_id = 0
 
@@ -105,6 +107,8 @@ class BenchmarkRunner:
                                 expected_pp = pp
                                 expected_ctx = depth
 
+                                metrics_before = fetch_metrics(self.config.metrics_url) if self.config.metrics_url else {}
+
                                 total_runs = self.config.num_runs + warmup_runs
                                 for run in range(total_runs):
                                     is_warmup = run < warmup_runs
@@ -131,7 +135,8 @@ class BenchmarkRunner:
                                         concurrency,
                                         current_pp,
                                         current_depth,
-                                        self.config.no_cache
+                                        self.config.no_cache,
+                                        self.config.prompt_mode
                                     )
 
                                     if self.config.enable_prefix_caching and depth > 0:
@@ -230,13 +235,16 @@ class BenchmarkRunner:
                                             print(f"Post-run command failed: {e}")
 
                                 # Aggregate and Record
+                                metrics_after = fetch_metrics(self.config.metrics_url) if self.config.metrics_url else {}
+                                accept_per_draft, prefix_hit_rate = compute_metric_deltas(metrics_before, metrics_after)
+
                                 if self.config.enable_prefix_caching and depth > 0:
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
+                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
                                 else:
                                     # Standard run expected tokens = pp + depth (usually depth=0 or concatenated)
                                     # In the loop above: expected_tokens = current_pp + current_depth
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries)
+                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
 
                 self.results.metadata = BenchmarkMetadata(
                     version=__version__,

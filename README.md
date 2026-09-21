@@ -183,6 +183,10 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--exit-on-first-fail`: Stop execution on first failed test and exit with non-zero status.
 -   `--no-results-on-fail`: Prevent saving/printing any results when error is experienced, turns on --exit-on-first-fail as well.
 -   `--extra-body`: Extra JSON fields to merge into benchmark chat completion requests. Accepts repeated or comma-separated `key=value` / `key:value` entries, e.g. `--extra-body min_tokens=1024,ignore_eos=true`.
+-   `--prompt-mode`: `continue` (default, raw text continuation) or `task` (chat-shaped agent coding turn). See [Task workload mode](#task-workload-mode).
+-   `--no-force-length`: Disable forced `min_tokens`/`ignore_eos` even if `--exact-tg` is set, so generation can stop naturally. Recommended with `--prompt-mode task`.
+-   `--temperature`, `--top-p`, `--top-k`: Sampling params to send. Each is unset by default — when omitted, nothing is sent for it and the model's own `generation_config` on the server applies.
+-   `--metrics-url`: Prometheus metrics endpoint (e.g. `http://host:8000/metrics`) to scrape before and after each test cell. Adds `accept/draft` (spec-decode acceptance ratio) and `prefix-hit` (prefix-cache hit ratio) columns to the results table/CSV; blank when those metrics aren't exposed by the server.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
 
@@ -295,6 +299,22 @@ llama-benchy \
 ```
 
 This will run benchmarks for all combinations of pp (128, 256), tg (32, 64), and depth (0, 1024).
+
+### Task workload mode
+
+`--prompt-mode continue` (the default) sends raw-text continuation with `ignore_eos`/`min_tokens`, which is great for measuring raw prefill/decode speed but drives speculative-decoding/MTP acceptance far below what real agent traffic sees, because the model isn't predicting natural code tokens. `--prompt-mode task` instead sends a chat-shaped agent turn — a short fixed system prompt, a corpus excerpt presented as a file, and one deterministic coding instruction — while keeping the same pp/depth slicing, prefix-caching and concurrency machinery, so the benchmark grid stays comparable but the traffic shape looks like real coding-agent usage.
+
+```bash
+llama-benchy \
+  --base-url http://localhost:8000/v1 \
+  --model my-model \
+  --prompt-mode task \
+  --no-force-length \
+  --pp 2048 \
+  --tg 512 \
+  --depth 0 16384 65536 \
+  --concurrency 1 4 10
+```
 
 ### Concurrency measurement
 

@@ -39,12 +39,20 @@ class LLMClient:
         model_name: str,
         extra_body: Optional[Dict[str, Any]] = None,
         exact_tg: bool = False,
+        no_force_length: bool = False,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
     ):
         self.base_url = base_url
         self.api_key = api_key
         self.model_name = model_name
         self.extra_body = extra_body or {}
         self.exact_tg = exact_tg
+        self.no_force_length = no_force_length
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
         self.headers = {"Authorization": f"Bearer {api_key}"}
 
     def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool) -> Dict[str, Any]:
@@ -60,9 +68,16 @@ class LLMClient:
         if no_cache:
             payload["cache_prompt"] = False
 
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
+        if self.top_k is not None:
+            payload["top_k"] = self.top_k
+
         payload.update(self.extra_body)
 
-        if self.exact_tg:
+        if self.exact_tg and not self.no_force_length:
             payload["max_tokens"] = max_tokens
             payload["min_tokens"] = max_tokens
             payload["ignore_eos"] = True

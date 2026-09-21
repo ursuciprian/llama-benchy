@@ -82,6 +82,27 @@ class BenchmarkConfig(BaseModel):
         None,
         description="Emit progress events as JSONL to PATH (or '-' for stdout). See docs/progress-schema.md.",
     )
+    prompt_mode: str = Field(
+        "continue",
+        description="Prompt shape: 'continue' (raw text continuation) or 'task' (chat-shaped agent coding turn)",
+    )
+    no_force_length: bool = Field(
+        False,
+        description="Disable forced min_tokens/ignore_eos even if --exact-tg is set, so generation can stop naturally",
+    )
+    temperature: Optional[float] = Field(
+        None, description="Sampling temperature to send (unset: server default applies)"
+    )
+    top_p: Optional[float] = Field(
+        None, description="top_p to send (unset: server default applies)"
+    )
+    top_k: Optional[int] = Field(
+        None, description="top_k to send (unset: server default applies)"
+    )
+    metrics_url: Optional[str] = Field(
+        None,
+        description="Prometheus metrics endpoint to scrape before/after each test cell for spec-decode acceptance and prefix-cache hit rate",
+    )
 
     @staticmethod
     def _parse_extra_body(values: Optional[List[str]]) -> Dict[str, Any]:
@@ -383,6 +404,53 @@ class BenchmarkConfig(BaseModel):
                 "consume this stream. Schema: docs/progress-schema.md."
             ),
         )
+        parser.add_argument(
+            "--prompt-mode",
+            type=str,
+            default="continue",
+            choices=["continue", "task"],
+            help=(
+                "Prompt shape - default: 'continue' (raw text continuation, current behavior). "
+                "'task' sends a chat-shaped agent coding turn: a short fixed system prompt, "
+                "a corpus excerpt presented as a file, and one deterministic coding instruction."
+            ),
+        )
+        parser.add_argument(
+            "--no-force-length",
+            action="store_true",
+            help=(
+                "Disable forced min_tokens/ignore_eos even if --exact-tg is set, so generation "
+                "can stop naturally (recommended with --prompt-mode task)."
+            ),
+        )
+        parser.add_argument(
+            "--temperature",
+            type=float,
+            default=None,
+            help="Sampling temperature to send. Unset (default): not sent, the model's generation_config applies.",
+        )
+        parser.add_argument(
+            "--top-p",
+            type=float,
+            default=None,
+            help="top_p to send. Unset (default): not sent, the model's generation_config applies.",
+        )
+        parser.add_argument(
+            "--top-k",
+            type=int,
+            default=None,
+            help="top_k to send. Unset (default): not sent, the model's generation_config applies.",
+        )
+        parser.add_argument(
+            "--metrics-url",
+            type=str,
+            default=None,
+            help=(
+                "Prometheus metrics endpoint (e.g. http://host:8000/metrics) to scrape before/after "
+                "each test cell. Adds 'accept/draft' (spec-decode acceptance) and 'prefix-hit' "
+                "(prefix-cache hit rate) columns to results; blank if the metrics are absent."
+            ),
+        )
 
         args = parser.parse_args()
 
@@ -449,4 +517,10 @@ class BenchmarkConfig(BaseModel):
             no_results_on_fail=args.no_results_on_fail,
             extra_body=extra_body,
             emit_progress=args.emit_progress,
+            prompt_mode=args.prompt_mode,
+            no_force_length=args.no_force_length,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            metrics_url=args.metrics_url,
         )

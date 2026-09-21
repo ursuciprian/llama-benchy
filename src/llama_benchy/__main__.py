@@ -41,6 +41,10 @@ async def main_async():
         config.served_model_name,
         config.extra_body,
         config.exact_tg,
+        config.no_force_length,
+        config.temperature,
+        config.top_p,
+        config.top_k,
     )
 
     progress = None
