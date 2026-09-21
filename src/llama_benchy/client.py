@@ -43,6 +43,8 @@ class LLMClient:
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
+        count_reasoning: bool = True,
+        chat_template_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self.base_url = base_url
         self.api_key = api_key
@@ -53,6 +55,13 @@ class LLMClient:
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        # Thinking models (e.g. Qwen3 with --reasoning-parser) stream their
+        # answer as delta.reasoning_content first. Counting it as generated
+        # output (default) keeps tg throughput non-blank; --no-count-reasoning
+        # restricts timing/counting to delta.content only, matching pre-reasoning
+        # behavior for models/harnesses that only care about the final answer.
+        self.count_reasoning = count_reasoning
+        self.chat_template_kwargs = chat_template_kwargs or {}
         self.headers = {"Authorization": f"Bearer {api_key}"}
 
     def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool) -> Dict[str, Any]:
@@ -74,6 +83,9 @@ class LLMClient:
             payload["top_p"] = self.top_p
         if self.top_k is not None:
             payload["top_k"] = self.top_k
+
+        if self.chat_template_kwargs:
+            payload["chat_template_kwargs"] = self.chat_template_kwargs
 
         payload.update(self.extra_body)
 
@@ -395,8 +407,8 @@ class LLMClient:
 
                                     delta = chunk['choices'][0].get('delta', {})
                                     content = delta.get('content')
-                                    reasoning_content = delta.get('reasoning_content')
-                                    reasoning = delta.get('reasoning')
+                                    reasoning_content = delta.get('reasoning_content') if self.count_reasoning else None
+                                    reasoning = delta.get('reasoning') if self.count_reasoning else None
 
                                     if content or reasoning_content or reasoning:
                                         if result.first_token_ts is None:

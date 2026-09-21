@@ -186,6 +186,8 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 -   `--prompt-mode`: `continue` (default, raw text continuation) or `task` (chat-shaped agent coding turn). See [Task workload mode](#task-workload-mode).
 -   `--no-force-length`: Disable forced `min_tokens`/`ignore_eos` even if `--exact-tg` is set, so generation can stop naturally. Recommended with `--prompt-mode task`.
 -   `--temperature`, `--top-p`, `--top-k`: Sampling params to send. Each is unset by default — when omitted, nothing is sent for it and the model's own `generation_config` on the server applies.
+-   `--count-reasoning` / `--no-count-reasoning`: Thinking models (e.g. served with `--reasoning-parser qwen3`) stream their answer as `delta.reasoning_content` chunks before (or instead of) `delta.content`. By default (`--count-reasoning`), those chunks count as generated output for timing and token counts, so `tg`/decode throughput isn't blank for thinking models. `--no-count-reasoning` restricts counting to `delta.content` only, matching pre-reasoning-aware behavior.
+-   `--chat-template-kwargs '<JSON>'`: JSON object merged into each request as `chat_template_kwargs`. For Qwen3-family models, `--chat-template-kwargs '{"enable_thinking": false}'` disables thinking mode at the template level instead of relying on `--count-reasoning`.
 -   `--metrics-url`: Prometheus metrics endpoint (e.g. `http://host:8000/metrics`) to scrape before and after each test cell. Adds `accept/draft` (spec-decode acceptance ratio) and `prefix-hit` (prefix-cache hit ratio) columns to the results table/CSV; blank when those metrics aren't exposed by the server.
 
 For fixed-output-length throughput benchmarks, prefer `--exact-tg` over manually passing `min_tokens` and `ignore_eos`:
@@ -309,6 +311,21 @@ llama-benchy \
   --base-url http://localhost:8000/v1 \
   --model my-model \
   --prompt-mode task \
+  --no-force-length \
+  --pp 2048 \
+  --tg 512 \
+  --depth 0 16384 65536 \
+  --concurrency 1 4 10
+```
+
+Against a thinking model (e.g. Qwen3 served with `--reasoning-parser qwen3`), the response streams as `delta.reasoning_content` first. `--count-reasoning` (default) counts that toward `tg` throughput so it isn't blank; alternatively, disable thinking entirely at the template level:
+
+```bash
+llama-benchy \
+  --base-url http://localhost:8000/v1 \
+  --model my-model \
+  --prompt-mode task \
+  --chat-template-kwargs '{"enable_thinking": false}' \
   --no-force-length \
   --pp 2048 \
   --tg 512 \
