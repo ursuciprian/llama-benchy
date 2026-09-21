@@ -25,10 +25,26 @@ class BenchmarkRunner:
         self.results.metrics_enabled = bool(config.metrics_url)
         self.progress = progress
         self._next_request_id = 0
+        self._live_file = f"{config.save_result}.live.md" if config.live and config.save_result else None
+        if self._live_file:
+            open(self._live_file, "w").close()  # truncate any stale file from a previous run
 
         # We need to track deltas from warmup to adapt prompts
         self.delta_user = 0
         self.delta_context = 0
+
+    def _emit_live_row(self, run) -> None:
+        if not self.config.live:
+            return
+        max_concurrency = max(self.config.concurrency_levels) if self.config.concurrency_levels else 1
+        for line in self.results.format_live_rows(run, max_concurrency):
+            print(line, flush=True)
+            if self._live_file:
+                try:
+                    with open(self._live_file, "a") as f:
+                        f.write(line + "\n")
+                except OSError:
+                    pass
 
     def _new_request_id(self) -> int:
         rid = self._next_request_id
@@ -100,7 +116,7 @@ class BenchmarkRunner:
                     for pp in self.config.pp_counts:
                         for tg in self.config.tg_counts:
                             for concurrency in self.config.concurrency_levels:
-                                print(f"Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}")
+                                print(f"Running test: pp={pp}, tg={tg}, depth={depth}, concurrency={concurrency}", flush=True)
 
                                 run_std_results = []
                                 run_ctx_results = []
@@ -239,12 +255,15 @@ class BenchmarkRunner:
                                 accept_per_draft, prefix_hit_rate = compute_metric_deltas(metrics_before, metrics_after)
 
                                 if self.config.enable_prefix_caching and depth > 0:
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    ctx_run = self.results.add(self.config.model, pp, tg, depth, concurrency, run_ctx_results, latency, expected_ctx, is_context_phase=True, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    self._emit_live_row(ctx_run)
+                                    std_run = self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    self._emit_live_row(std_run)
                                 else:
                                     # Standard run expected tokens = pp + depth (usually depth=0 or concatenated)
                                     # In the loop above: expected_tokens = current_pp + current_depth
-                                    self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    std_run = self.results.add(self.config.model, pp, tg, depth, concurrency, run_std_results, latency, expected_pp + expected_ctx, is_context_phase=False, save_total_throughput_timeseries=self.config.save_total_throughput_timeseries, save_all_throughput_timeseries=self.config.save_all_throughput_timeseries, accept_per_draft=accept_per_draft, prefix_hit_rate=prefix_hit_rate)
+                                    self._emit_live_row(std_run)
 
                 self.results.metadata = BenchmarkMetadata(
                     version=__version__,

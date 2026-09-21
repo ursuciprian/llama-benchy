@@ -14,6 +14,14 @@ from .runner import BenchmarkRunner
 from .progress import ProgressEmitter
 
 async def main_async():
+    # Unbuffer stdout so status/progress lines show up live under `nohup` or
+    # any other redirect-to-file (Python fully buffers stdout when it's not
+    # a tty; this forces line buffering regardless).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
+
     # 1. Parse Configuration
     config = BenchmarkConfig.from_args()
 

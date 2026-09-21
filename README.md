@@ -400,6 +400,27 @@ exact. When token IDs are unavailable, `tokens` events are marked
 Thanks to [@alexziskind1](https://github.com/alexziskind1) for contributing
 the progress stream functionality and reference visualizer integration.
 
+## Watching a run live
+
+By default the results table only prints once the whole grid finishes, and
+under `nohup`/redirected-to-a-file runs even the `Running test: ...` status
+lines can sit in a stdout buffer until the process exits. Pass `--live` to
+print each test cell's result row (same columns as the final table,
+including `accept/draft` / `prefix-hit` when `--metrics-url` is set) as soon
+as that cell completes, instead of waiting for the whole grid:
+
+```bash
+nohup llama-benchy --base-url http://localhost:8000/v1 --model … \
+                    --pp 512 1024 --tg 128 --depth 0 4096 \
+                    --live --save-result results.md > run.log 2>&1 &
+tail -f run.log                # status lines + live rows as each cell finishes
+tail -f results.md.live.md     # just the live rows, if --save-result is set
+```
+
+The final table at the end of `run.log` (or `results.md`) is unchanged.
+Meanwhile, a vLLM `/metrics` endpoint plus a Grafana dashboard will show
+server-side tokens/s in real time alongside the client-side numbers here.
+
 ## Development
 
 ### Running Integration Tests
