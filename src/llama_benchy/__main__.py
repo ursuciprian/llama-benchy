@@ -53,6 +53,8 @@ async def main_async():
         config.temperature,
         config.top_p,
         config.top_k,
+        config.count_reasoning,
+        config.chat_template_kwargs,
     )
 
     progress = None

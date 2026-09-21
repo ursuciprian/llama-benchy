@@ -107,6 +107,23 @@ class BenchmarkConfig(BaseModel):
         False,
         description="Print each test cell's result row immediately after it completes, and append to <save-result>.live.md if --save-result is given",
     )
+    count_reasoning: bool = Field(
+        True,
+        description=(
+            "Count delta.reasoning_content/delta.reasoning stream chunks as generated "
+            "output for timing and token counts (default: True). Thinking models stream "
+            "their answer as reasoning first; without this, tg throughput reads blank "
+            "for task-mode/thinking workloads. --no-count-reasoning restricts to "
+            "delta.content only."
+        ),
+    )
+    chat_template_kwargs: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "JSON object passed through as 'chat_template_kwargs' in each request body, "
+            "e.g. '{\"enable_thinking\": false}' to disable Qwen3 thinking mode."
+        ),
+    )
 
     @staticmethod
     def _parse_extra_body(values: Optional[List[str]]) -> Dict[str, Any]:
@@ -456,6 +473,32 @@ class BenchmarkConfig(BaseModel):
             ),
         )
         parser.add_argument(
+            "--count-reasoning",
+            action="store_true",
+            default=True,
+            help=(
+                "Count delta.reasoning_content/delta.reasoning stream chunks as generated "
+                "output for timing and token counts (default: True). Needed for thinking "
+                "models (e.g. --reasoning-parser qwen3) to report non-blank tg throughput."
+            ),
+        )
+        parser.add_argument(
+            "--no-count-reasoning",
+            action="store_false",
+            dest="count_reasoning",
+            help="Restrict timing/token counting to delta.content only, ignoring reasoning chunks.",
+        )
+        parser.add_argument(
+            "--chat-template-kwargs",
+            type=str,
+            default=None,
+            metavar="JSON",
+            help=(
+                "JSON object merged into each request as 'chat_template_kwargs', e.g. "
+                "'{\"enable_thinking\": false}' to disable Qwen3 thinking mode."
+            ),
+        )
+        parser.add_argument(
             "--metrics-url",
             type=str,
             default=None,
@@ -478,6 +521,17 @@ class BenchmarkConfig(BaseModel):
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
+
+        chat_template_kwargs: Dict[str, Any] = {}
+        if args.chat_template_kwargs:
+            try:
+                chat_template_kwargs = json.loads(args.chat_template_kwargs)
+            except json.JSONDecodeError as e:
+                print(f"Error: --chat-template-kwargs is not valid JSON: {e}")
+                sys.exit(1)
+            if not isinstance(chat_template_kwargs, dict):
+                print("Error: --chat-template-kwargs must be a JSON object.")
+                sys.exit(1)
 
         # Auto-detect model if not specified
         if args.model is None:
@@ -538,4 +592,6 @@ class BenchmarkConfig(BaseModel):
             top_k=args.top_k,
             metrics_url=args.metrics_url,
             live=args.live,
+            count_reasoning=args.count_reasoning,
+            chat_template_kwargs=chat_template_kwargs,
         )

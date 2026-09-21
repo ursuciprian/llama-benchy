@@ -110,6 +110,17 @@ def _content_event(content, token_ids=_MISSING):
     return {"choices": [choice]}
 
 
+def _reasoning_event(reasoning_content, token_ids=_MISSING):
+    choice = {
+        "index": 0,
+        "delta": {"reasoning_content": reasoning_content},
+        "finish_reason": None,
+    }
+    if token_ids is not _MISSING:
+        choice["token_ids"] = token_ids
+    return {"choices": [choice]}
+
+
 def _usage_event(completion_tokens):
     return {
         "choices": [],
@@ -121,8 +132,8 @@ def _usage_event(completion_tokens):
     }
 
 
-async def _run_stream(events, tokenizer=None, progress=None, request_id=None):
-    client = LLMClient("http://example.test/v1", "EMPTY", "model")
+async def _run_stream(events, tokenizer=None, progress=None, request_id=None, **client_kwargs):
+    client = LLMClient("http://example.test/v1", "EMPTY", "model", **client_kwargs)
     session = _FakeSession([_sse_event(event) for event in events])
     return await client.run_generation(
         session,
@@ -341,3 +352,56 @@ async def test_progress_token_ids_are_exact_not_estimated():
         {"request_id": 11, "count": 1, "snippet": "Hel", "estimated": False},
         {"request_id": 11, "count": 2, "snippet": "lo", "estimated": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_stream_counts_as_generation_by_default():
+    result = await _run_stream([
+        _reasoning_event("Let", token_ids=[1]),
+        _reasoning_event(" me think", token_ids=[2, 3]),
+        _usage_event(3),
+        "[DONE]",
+    ])
+
+    assert result.first_token_ts is not None
+    assert result.total_tokens == 3
+    assert len(result.token_timestamps) == 3
+
+
+@pytest.mark.asyncio
+async def test_no_count_reasoning_ignores_reasoning_only_stream():
+    result = await _run_stream([
+        _reasoning_event("Let", token_ids=[1]),
+        _reasoning_event(" me think", token_ids=[2, 3]),
+        _usage_event(3),
+        "[DONE]",
+    ], count_reasoning=False)
+
+    assert result.first_token_ts is None
+    assert result.token_timestamps == []
+    # No content chunks observed at all: usage-based fallback still applies,
+    # so total_tokens is the reported (reasoning-inclusive) usage count, but
+    # there is no timing to compute a non-blank tg throughput from -- this is
+    # the pre-fix "gen t/s = n/a for thinking models" behavior on purpose.
+    assert result.total_tokens == 3
+
+
+def test_chat_template_kwargs_passthrough():
+    client = LLMClient(
+        "http://example.test/v1",
+        "EMPTY",
+        "model",
+        chat_template_kwargs={"enable_thinking": False},
+    )
+
+    payload = client._build_generation_payload([], max_tokens=128, no_cache=False)
+
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_chat_template_kwargs_absent_by_default():
+    client = LLMClient("http://example.test/v1", "EMPTY", "model")
+
+    payload = client._build_generation_payload([], max_tokens=128, no_cache=False)
+
+    assert "chat_template_kwargs" not in payload
