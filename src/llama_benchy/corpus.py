@@ -108,5 +108,11 @@ class TokenizedCorpus:
     def get_tokens(self):
         return self.tokens
 
+    def get_name(self) -> str:
+        """Human-friendly file name for the corpus, for use in task-mode prompts."""
+        base = os.path.basename(self.book_url.rstrip("/"))
+        name = os.path.splitext(base)[0]
+        return name or "source.txt"
+
     def __len__(self):
         return len(self.tokens)

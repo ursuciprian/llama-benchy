@@ -51,8 +51,16 @@ class BenchmarkRun(BaseModel):
     
     # List of lists of time series, one list per run, containing one time series per request
     requests_throughput_over_time: Optional[List[List[TimeSeries]]] = Field(
-        None, 
+        None,
         description="A collection of time series data for individual requests. Organized as a list of lists, where the outer list represents batches and the inner list contains the throughput time series for each request in that batch."
+    )
+
+    # Prometheus-derived metrics (from --metrics-url), scraped before/after this test cell.
+    accept_per_draft: Optional[float] = Field(
+        None, description="Delta accepted / delta draft spec-decode tokens over this test cell (blank if unavailable)"
+    )
+    prefix_hit_rate: Optional[float] = Field(
+        None, description="Delta prefix-cache hits / delta prefix-cache queries over this test cell (blank if unavailable)"
     )
 
 class BenchmarkReport(BenchmarkMetadata):
@@ -63,6 +71,10 @@ class BenchmarkResults:
         self.runs: List[BenchmarkRun] = []
         self.metadata: Optional[BenchmarkMetadata] = None
         self.model_name: Optional[str] = None
+        # Set by the runner when --metrics-url is configured. Only then do the
+        # accept/draft and prefix-hit columns get added to md/csv output, so
+        # default output stays byte-identical when the flag is absent.
+        self.metrics_enabled: bool = False
 
     def _count_tokens_after_first_timestamp(self, timestamps: List[float]) -> int:
         if len(timestamps) < 2:
@@ -145,7 +157,9 @@ class BenchmarkResults:
             expected_pp_tokens: int,
             is_context_phase: bool = False,
             save_total_throughput_timeseries: bool = False,
-            save_all_throughput_timeseries: bool = False):
+            save_all_throughput_timeseries: bool = False,
+            accept_per_draft: Optional[float] = None,
+            prefix_hit_rate: Optional[float] = None):
         
         if self.model_name is None:
             self.model_name = model
@@ -217,7 +231,9 @@ class BenchmarkResults:
             est_ppt=run_metric_est_ppt,
             e2e_ttft=run_metric_e2e_ttft,
             throughput_over_time=agg_throughput_series if save_total_throughput_timeseries else None,
-            requests_throughput_over_time=agg_req_throughput_series if save_all_throughput_timeseries else None
+            requests_throughput_over_time=agg_req_throughput_series if save_all_throughput_timeseries else None,
+            accept_per_draft=accept_per_draft,
+            prefix_hit_rate=prefix_hit_rate
         ))
 
     def _process_batch(self, 
@@ -382,9 +398,11 @@ class BenchmarkResults:
                         "peak_ts_req": None,
                         "ttfr": run.ttfr,
                         "est_ppt": run.est_ppt,
-                        "e2e_ttft": run.e2e_ttft
+                        "e2e_ttft": run.e2e_ttft,
+                        "accept_per_draft": run.accept_per_draft,
+                        "prefix_hit_rate": run.prefix_hit_rate
                     })
-                
+
                 # Context Phase Token Generation
                 if run.tg_throughput or run.peak_throughput:
                     rows.append({
@@ -396,12 +414,14 @@ class BenchmarkResults:
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "accept_per_draft": run.accept_per_draft,
+                        "prefix_hit_rate": run.prefix_hit_rate
                     })
             else:
                 # Standard Phase
                 d_suffix = f" @ d{run.context_size}" if run.context_size > 0 else ""
-                
+
                 # Prompt Processing
                 if run.pp_throughput:
                     rows.append({
@@ -413,9 +433,11 @@ class BenchmarkResults:
                         "peak_ts_req": None,
                         "ttfr": run.ttfr,
                         "est_ppt": run.est_ppt,
-                        "e2e_ttft": run.e2e_ttft
+                        "e2e_ttft": run.e2e_ttft,
+                        "accept_per_draft": run.accept_per_draft,
+                        "prefix_hit_rate": run.prefix_hit_rate
                     })
-                
+
                 # Token Generation
                 if run.tg_throughput or run.peak_throughput:
                     rows.append({
@@ -427,7 +449,9 @@ class BenchmarkResults:
                         "peak_ts_req": run.peak_req_throughput,
                         "ttfr": None,
                         "est_ppt": None,
-                        "e2e_ttft": None
+                        "e2e_ttft": None,
+                        "accept_per_draft": run.accept_per_draft,
+                        "prefix_hit_rate": run.prefix_hit_rate
                     })
         return rows
 
@@ -440,35 +464,49 @@ class BenchmarkResults:
             if metric is None:
                 return ""
             return f"{metric.mean:.2f} ± {metric.std:.2f}"
-            
+
+        def fmt_ratio(value: Optional[float]) -> str:
+            if value is None:
+                return ""
+            return f"{value:.3f}"
+
+        def metrics_cols(row: Dict[str, Any]) -> List[str]:
+            if not self.metrics_enabled:
+                return []
+            return [fmt_ratio(row["accept_per_draft"]), fmt_ratio(row["prefix_hit_rate"])]
+
+        metrics_headers = ["accept/draft", "prefix-hit"] if self.metrics_enabled else []
+        metrics_align = ("right", "right") if self.metrics_enabled else ()
+
         data = [[
-            row["model"], 
-            row["test_name"], 
-            fmt(row["t_s"]), 
-            fmt(row["t_s_req"]), 
+            row["model"],
+            row["test_name"],
+            fmt(row["t_s"]),
+            fmt(row["t_s_req"]),
             fmt(row["peak_ts"]),
             fmt(row["peak_ts_req"]),
-            fmt(row["ttfr"]), 
-            fmt(row["est_ppt"]), 
+            fmt(row["ttfr"]),
+            fmt(row["est_ppt"]),
             fmt(row["e2e_ttft"])
-        ] for row in rows]
+        ] + metrics_cols(row) for row in rows]
 
         ts_header = "t/s (total)" if concurrency > 1 else "t/s"
-        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
-        
+        headers = ["model", "test", ts_header, "t/s (req)", "peak t/s", "peak t/s (req)", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
+
         if concurrency == 1:
             data = [[
-                row["model"], 
-                row["test_name"], 
+                row["model"],
+                row["test_name"],
                 fmt(row["t_s"]),
                 fmt(row["peak_ts"]),
-                fmt(row["ttfr"]), 
-                fmt(row["est_ppt"]), 
+                fmt(row["ttfr"]),
+                fmt(row["est_ppt"]),
                 fmt(row["e2e_ttft"])
-            ] for row in rows]
-            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"]
+            ] + metrics_cols(row) for row in rows]
+            headers = ["model", "test", ts_header, "peak t/s", "ttfr (ms)", "est_ppt (ms)", "e2e_ttft (ms)"] + metrics_headers
 
-        return tabulate(data, headers=headers, tablefmt="pipe", colalign=("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right"))
+        colalign = ("left", "right", "right", "right", "right", "right", "right", "right", "right") if concurrency > 1 else ("left", "right", "right", "right", "right", "right", "right")
+        return tabulate(data, headers=headers, tablefmt="pipe", colalign=colalign + metrics_align)
 
     def save_report(self, filename: Optional[str], format: str, concurrency: int = 1):
         msg = ""
@@ -508,7 +546,9 @@ class BenchmarkResults:
              rows = self._generate_rows()
              csv_rows = []
              headers = ["model", "test_name", "t_s_mean", "t_s_std", "t_s_req_mean", "t_s_req_std", "peak_ts_mean", "peak_ts_std", "peak_ts_req_mean", "peak_ts_req_std", "ttfr_mean", "ttfr_std", "est_ppt_mean", "est_ppt_std", "e2e_ttft_mean", "e2e_ttft_std"]
-             
+             if self.metrics_enabled:
+                 headers += ["accept_per_draft", "prefix_hit"]
+
              for r in rows:
                  row = {
                      "model": r["model"],
@@ -528,6 +568,9 @@ class BenchmarkResults:
                      "e2e_ttft_mean": r["e2e_ttft"].mean if r["e2e_ttft"] else None,
                      "e2e_ttft_std": r["e2e_ttft"].std if r["e2e_ttft"] else None,
                  }
+                 if self.metrics_enabled:
+                     row["accept_per_draft"] = r["accept_per_draft"]
+                     row["prefix_hit"] = r["prefix_hit_rate"]
                  csv_rows.append(row)
              
              if filename:
